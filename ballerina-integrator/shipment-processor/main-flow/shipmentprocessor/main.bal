@@ -31,18 +31,9 @@ service on ftpListener {
         foreach ftp:FileInfo addedFile in event.addedFiles {
             error? processResult = processFile(caller, addedFile, correlationId);
             if processResult is error {
-                log:printDebug(string `Failed to process file ${addedFile.name}`,
+                log:printError(string `Failed to process file ${addedFile.name}`,
                         correlationId = correlationId, 'error = processResult);
             }
-        }
-
-        // Reset state and generate reports
-        sentEmailCount = 0;
-        do {
-            check generateReports();
-        } on fail error e {
-            log:printError(string `Report generation failed: ${e.message()}`,
-                    correlationId = correlationId);
         }
     }
 }

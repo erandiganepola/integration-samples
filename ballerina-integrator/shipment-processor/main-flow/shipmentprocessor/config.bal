@@ -30,11 +30,6 @@ configurable boolean enableFileTrackingOptimization = true; // Skip already proc
 
 // API configuration                     
 configurable string shipmentApiBaseUrl = ?;
-// NDJSON output configuration
-configurable boolean enableNdjsonOutput = true;
-configurable string ndjsonOutputDirectory = ?;
-configurable string ndjsonFilePrefix = "enriched_";
-configurable string ndjsonFileExtension = ".ndjson";
 
 // MySQL database configurations
 configurable boolean enableDatabaseStorage = true;
@@ -49,9 +44,8 @@ configurable boolean enableEnrichResponseLogging = true;
 // Kafka configuration
 configurable string kafkaBootstrapServers = ?;
 configurable string kafkaTopic = "shipments-received-v1";
-configurable string reportGenerationurl = ?;
 
-configurable string kafkaCaCertPath = ?;
-configurable string kafkaClientCertPath = ?;
-configurable string kafkaClientKeyPath = ?;
+// configurable string kafkaCaCertPath = ?;
+// configurable string kafkaClientCertPath = ?;
+// configurable string kafkaClientKeyPath = ?;
 configurable int kafkaEventPublishCount = 1;

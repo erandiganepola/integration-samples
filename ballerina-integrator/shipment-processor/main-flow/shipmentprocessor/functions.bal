@@ -6,6 +6,7 @@ import ballerina/log;
 import ballerina/time;
 import ballerina/uuid;
 import ballerinax/kafka;
+import ballerina/file;
 
 // Global map to track processed files to avoid re-downloading
 map<boolean> processedFiles = {};
@@ -75,7 +76,7 @@ function downloadFileFromFTP(ftp:Caller caller, ftp:FileInfo fileInfo, string co
 
 // Process downloaded CSV file 
 function processDownloadedCsvFile(string filePath, string fileName, string correlationId) returns ProcessingResult|error {
-    log:printInfo(string `Processing CSV file: ${fileName}`, correlationId = correlationId);
+    log:printInfo("Processing CSV file:", fileName = fileName, filePath = filePath, correlationId = correlationId);
 
     ProcessingResult result = initializeProcessingResult();
     string[][] currentBatch = [];
@@ -117,7 +118,7 @@ function processDownloadedCsvFile(string filePath, string fileName, string corre
 
             // Process batch when it reaches the configured size
             if currentBatch.length() >= batchSize {
-                processBatchAndGenerateNdjson(currentBatch, fileName, batchNumber, correlationId, result);
+                processBatchAndAggregateResults(currentBatch, fileName, batchNumber, correlationId, result);
 
                 totalBatchesProcessed += 1;
 
@@ -128,15 +129,18 @@ function processDownloadedCsvFile(string filePath, string fileName, string corre
 
         // Process any remaining records in the final batch
         if currentBatch.length() > 0 {
-            processBatchAndGenerateNdjson(currentBatch, fileName, batchNumber, correlationId, result);
+            processBatchAndAggregateResults(currentBatch, fileName, batchNumber, correlationId, result);
             totalBatchesProcessed += 1;
         }
 
         check csvStream.close();
 
-        log:printInfo(string `CSV processing completed: ${fileName}, ` +
-                    string `batches: ${batchNumber}, total: ${result.totalRecords}`,
+        log:printInfo(string `CSV processing completed: ${fileName}, batches: ${batchNumber}, total: ${result.totalRecords}`,
                 correlationId = correlationId);
+            
+        if result.errors.length() > 0 {
+            log:printError("CSV processing failed with errors:", errors = result.errors, correlationId = correlationId);
+        }
 
         return result;
 
@@ -166,7 +170,7 @@ function cleanupTempFile(string tempFilePath, string correlationId) returns erro
 
         // Comprehensive file cleanup approach:
         // 1. Overwrite file with empty content to clear data and free disk space
-        check io:fileWriteBytes(tempFilePath, []);
+        check file:remove(tempFilePath);
 
         // 2. Log successful cleanup
         log:printInfo(string `Successfully cleared temporary file content: ${tempFilePath} (freed ${fileSize} bytes)`, correlationId = correlationId);
@@ -197,52 +201,11 @@ function logProcessingResult(ProcessingResult result, string fileName, string co
 }
 
 // Generate NDJSON output from enriched shipments
-function generateNdjsonOutput(EnrichedShipment[] enrichedShipments, string sourceFileName, int batchNo, string correlationId) returns NdjsonResult|error {
-    if enrichedShipments.length() == 0 {
-        return error("No enriched shipments to process");
-    }
-
-    string ndjsonContent = convertToNdjson(enrichedShipments);
-    string baseName = getFileBaseName(sourceFileName);
-    string ndjsonFileName = string `${ndjsonFilePrefix}${baseName}_${ndjsonFileExtension}`;
-    string filePath = ndjsonOutputDirectory + ndjsonFileName;
-
-    do {
-        check writeNdjsonFile(ndjsonFileName, ndjsonContent, batchNo, correlationId);
-        return createNdjsonResult(ndjsonFileName, filePath, enrichedShipments.length(), ndjsonContent.length(), true);
-    } on fail error e {
-        return createNdjsonResult(ndjsonFileName, filePath, enrichedShipments.length(), 0, false, e.message());
-    }
-}
 
 // Helper function to extract base name from filename
 function getFileBaseName(string fileName) returns string {
     int? dotIndex = fileName.lastIndexOf(".");
     return dotIndex is int && dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
-}
-
-// Helper function to create NDJSON result record
-function createNdjsonResult(string fileName, string filePath, int recordCount, int fileSize, boolean success, string? errorMessage = ()) returns NdjsonResult {
-    return {
-        fileName,
-        filePath,
-        recordCount,
-        fileSize,
-        success,
-        errorMessage,
-        sftpUploaded: false,
-        sftpPath: ()
-    };
-}
-
-// Store NDJSON content in database asynchronously
-public function writeNdjsonFile(string fileName, string ndjsonContent, int batchNo, string correlationId) returns error? {
-    if !enableDatabaseStorage {
-        return;
-    }
-
-    int recordCount = calculateNdjsonRecordCount(ndjsonContent);
-    future<DatabaseResult> _ = start insertNdjsonContentAsync(fileName, ndjsonContent, recordCount, batchNo, correlationId);
 }
 
 // Log database operation result asynchronously
@@ -261,12 +224,6 @@ function logDatabaseResult(future<DatabaseResult> dbFuture, string fileName, str
 
     log:printError(string `Async NDJSON storage failed: ${fileName}`, correlationId = correlationId, 'error = result);
     return {success: false, recordsInserted: 0, errorMessage: result.message()};
-}
-
-// Calculate the number of records in NDJSON content
-function calculateNdjsonRecordCount(string ndjsonContent) returns int {
-    string trimmed = ndjsonContent.trim();
-    return trimmed.length() == 0 ? 0 : re `\n`.split(trimmed).filter(line => line.trim().length() > 0).length();
 }
 
 // Process a batch of CSV records with enrichment, async database storage
@@ -303,18 +260,12 @@ function processBatch(string[][] batch, string correlationId) returns Processing
                 if csvRecord is ShipmentCsvRecord {
                     records.push(csvRecord);
                 } else {
-                    result.quarantinedRecords += 1;
                     string errorMsg = "Failed to parse CSV record: " + csvRecord.message();
-                    result.errors.push(errorMsg);
-                    ShipmentCsvRecord minimalRecord = createMinimalRecord(row);
-                    quarantineRecord(minimalRecord, errorMsg, correlationId);
+                    log:printError(errorMsg, correlationId = correlationId);
                 }
             } else {
-                result.quarantinedRecords += 1;
                 string errorMsg = "Invalid CSV row: insufficient columns";
-                result.errors.push(errorMsg);
-                ShipmentCsvRecord minimalRecord = createMinimalRecord(row);
-                quarantineRecord(minimalRecord, errorMsg, correlationId);
+                log:printError(errorMsg, correlationId = correlationId);
             }
         }
 
@@ -334,7 +285,7 @@ function processBatch(string[][] batch, string correlationId) returns Processing
 
     // Perform async database insertion
     if enableDatabaseStorage && enrichedShipmentsForDb.length() > 0 {
-        DatabaseResult dbResult = insertEnrichedShipmentsBatchAsync(enrichedShipmentsForDb, correlationId);
+        DatabaseResult dbResult = insertAndNotifyEnrichedShipmentsAsync(enrichedShipmentsForDb, correlationId);
         if dbResult.success {
             result.dbInsertedRecords = dbResult.recordsInserted;
         } else {
@@ -348,7 +299,7 @@ function processBatch(string[][] batch, string correlationId) returns Processing
 // Process records synchronously 
 function processRecordsSync(ShipmentCsvRecord[] records, string correlationId, ProcessingResult result, EnrichedShipment[] enrichedShipmentsForDb) {
     foreach ShipmentCsvRecord csvRecord in records {
-        EnrichedShipment|error enrichedResult = processShipmentRecord(csvRecord, correlationId);
+        EnrichedShipment|error enrichedResult = processShipmentRecordAndEnrichData(csvRecord, correlationId);
 
         if enrichedResult is EnrichedShipment {
             result.successfulRecords += 1;
@@ -364,39 +315,16 @@ function processRecordsSync(ShipmentCsvRecord[] records, string correlationId, P
     }
 }
 
-// Helper function to create minimal record for quarantine
-function createMinimalRecord(string[] row) returns ShipmentCsvRecord {
-    return {
-        shipmentId: row.length() > 0 ? row[0] : "UNKNOWN",
-        shipmentDate: row.length() > 1 ? row[1] : "UNKNOWN",
-        productCode: row.length() > 2 ? row[2] : "UNKNOWN",
-        email: row.length() > 3 ? row[3] : "UNKNOWN",
-        shipmentStatus: row.length() > 4 ? row[4] : "UNKNOWN",
-        orderId: (),
-        origin: (),
-        destination: ()
-    };
-}
-
-// Helper function to process batch and generate NDJSON output
-function processBatchAndGenerateNdjson(string[][] batch, string fileName, int batchNumber, string correlationId, ProcessingResult overallResult) {
+// Helper function to process batch and enrich data
+function processBatchAndAggregateResults(string[][] batch, string fileName, int batchNumber, string correlationId, ProcessingResult overallResult) {
     if batch.length() == 0 {
+        log:printWarn(string `No records to process in batch ${batchNumber}`, correlationId = correlationId);
         return;
     }
 
+    log:printInfo(string `Processing batch ${batchNumber} with ${batch.length()} records`, correlationId = correlationId);
     ProcessingResult batchResult = processBatch(batch, correlationId);
     aggregateBatchResults(overallResult, batchResult, correlationId);
-
-    if enableNdjsonOutput && batchResult.enrichedShipments.length() > 0 {
-        string batchFileName = fileName + "_batch_" + batchNumber.toString();
-        NdjsonResult|error ndjsonResult = generateNdjsonOutput(batchResult.enrichedShipments, batchFileName, batchNumber, correlationId);
-        if ndjsonResult is NdjsonResult && ndjsonResult.success {
-            overallResult.ndjsonFiles.push(ndjsonResult.fileName);
-            if ndjsonResult.sftpUploaded {
-                overallResult.sftpUploadedFiles.push(ndjsonResult.fileName);
-            }
-        }
-    }
 }
 
 // Initialize processing result record
@@ -424,12 +352,6 @@ function aggregateBatchResults(ProcessingResult overallResult, ProcessingResult 
 
     foreach string batchError in batchResult.errors {
         overallResult.errors.push(batchError);
-    }
-
-    if enableNdjsonOutput {
-        foreach EnrichedShipment enrichedShipment in batchResult.enrichedShipments {
-            overallResult.enrichedShipments.push(enrichedShipment);
-        }
     }
 }
 
@@ -478,8 +400,9 @@ function parseShipmentCsvRecord(string[] row) returns ShipmentCsvRecord|error {
 }
 
 // Process individual shipment record with retry logic and return enriched data
-function processShipmentRecord(ShipmentCsvRecord csvRecord, string _parentCorrelationId) returns EnrichedShipment|error {
+function processShipmentRecordAndEnrichData(ShipmentCsvRecord csvRecord, string _parentCorrelationId) returns EnrichedShipment|error {
     string correlationId = uuid:createType4AsString();
+    log:printInfo("Processing shipment record and enriching data", shipmentId = csvRecord.shipmentId, correlationId = correlationId);
 
     foreach int attempt in 1 ... maxRetryAttempts {
         Shipment|error shipmentResult = getShipmentById(csvRecord.shipmentId, correlationId);
@@ -491,12 +414,13 @@ function processShipmentRecord(ShipmentCsvRecord csvRecord, string _parentCorrel
                 logEnrichedShipment(enrichedShipment, correlationId);
             }
             return enrichedShipment;
-        }
+        } 
+        
+        log:printWarn("Failed to get shipment by ID:", shipmentId = csvRecord.shipmentId, 'error = shipmentResult, correlationId = correlationId);
 
         if attempt < maxRetryAttempts {
             runtime:sleep(<decimal>retryDelaySeconds);
         } else {
-            quarantineRecord(csvRecord, shipmentResult.message(), correlationId);
             return error(string `Max retries reached for shipment: ${csvRecord.shipmentId}, error: ${shipmentResult.message()}`);
         }
     }
@@ -531,57 +455,6 @@ function getShipmentById(string shipmentId, string correlationId) returns Shipme
     }
 
     return check payload.cloneWithType(Shipment);
-}
-
-// Quarantine record with simplified structure
-function quarantineRecord(ShipmentCsvRecord csvRecord, string errorMessage, string correlationId) {
-    string quarantineId = "QR" + uuid:createType1AsString();
-    string csvRowJson = [
-        csvRecord.shipmentId,
-        csvRecord.shipmentDate,
-        csvRecord.productCode,
-        csvRecord.email,
-        csvRecord.shipmentStatus,
-        csvRecord.orderId ?: "",
-        csvRecord.origin ?: "",
-        csvRecord.destination ?: ""
-    ].toBalString();
-
-    QuarantineDbRecord quarantineRecord = {
-        quarantine_id: quarantineId,
-        shipment_id: csvRecord.shipmentId,
-        shipment_date: csvRecord.shipmentDate,
-        csv_product_code: csvRecord.productCode,
-        email: csvRecord.email,
-        shipment_status: csvRecord.shipmentStatus,
-        order_id: csvRecord.orderId,
-        origin: csvRecord.origin,
-        destination: csvRecord.destination,
-        correlation_id: correlationId,
-        error_message: errorMessage,
-        error_type: "PROCESSING_ERROR",
-        attempt_count: maxRetryAttempts,
-        quarantined_at: time:utcToString(time:utcNow()),
-        csv_row_json: csvRowJson,
-        file_name: "unknown",
-        file_source: "FTP",
-        retry_eligible: false,
-        retry_after: "",
-        resolved_at: (),
-        resolution_notes: ()
-    };
-
-    DatabaseResult dbResult = insertQuarantineRecordToDb(quarantineRecord, correlationId);
-    if !dbResult.success {
-        log:printError(string `Failed to save quarantine: ${quarantineId}`,
-                correlationId = correlationId,
-                'error = error(dbResult.errorMessage ?: "Unknown error"));
-    }
-}
-
-function generateReports() returns error? {
-    string report_service_res = check reportGenerationClient->/report;
-    log:printInfo("Report service", response = report_service_res);
 }
 
 // Function to publish shipment event to Kafka

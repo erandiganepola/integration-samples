@@ -106,36 +106,13 @@ public function getMysqlClient() returns mysql:Client|error {
     return mysqlClientInstance;
 }
 
-final http:Client reportGenerationClient = check new (reportGenerationurl);
-
-
 // Kafka producer configuration with SSL for Aiven
 kafka:ProducerConfiguration producerConfig = {
-    securityProtocol: kafka:PROTOCOL_SSL,
-    secureSocket: {
-        cert: kafkaCaCertPath,
-        key: {
-            certFile: kafkaClientCertPath,
-            keyFile: kafkaClientKeyPath
-        },
-        protocol: {
-            name: "TLS"
-        }
-    }
+    securityProtocol: kafka:PROTOCOL_PLAINTEXT
 };
 
 // Kafka producer for publishing shipment events
 kafka:Producer kafkaProducer = check new (
     bootstrapServers = kafkaBootstrapServers,
-    securityProtocol = kafka:PROTOCOL_SSL,
-    secureSocket = {
-        cert: kafkaCaCertPath,
-        key: {
-            certFile: kafkaClientCertPath,
-            keyFile: kafkaClientKeyPath
-        },
-        protocol: {
-            name: "TLS"
-        }
-    }
+    securityProtocol = kafka:PROTOCOL_PLAINTEXT
 );

@@ -6,17 +6,7 @@ listener kafka:Listener kafkaLis = new kafka:Listener(
     bootstrapServers = kafkaBootstrapServers,
     groupId = "shipment-email-service",
     topics = [kafkaTopic],
-    securityProtocol = kafka:PROTOCOL_SSL,
-    secureSocket = {
-        cert: kafkaCaCertPath,
-        key: {
-            certFile: kafkaClientCertPath,
-            keyFile: kafkaClientKeyPath
-        },
-        protocol: {
-            name: "TLS"
-        }
-    }
+    securityProtocol = kafka:PROTOCOL_PLAINTEXT
 );
 
 service on kafkaLis {
@@ -28,13 +18,13 @@ service on kafkaLis {
             // Handle the message value conversion
             ShipmentMessage shipmentMessage = check getShipmentRecord(currentMessage.value);
 
-            log:printInfo("Processing shipment message",
+            log:printInfo("Processing shipment message and sending email",
                     shipmentId = shipmentMessage.shipmentId,
                     correlationId = correlationId
             );
 
             // Send email notification
-            error? emailResult = sendShipmentNotification(shipmentMessage, correlationId);
+            error? emailResult = sendShipmentNotificationEmail(shipmentMessage, correlationId);
             if emailResult is error {
                 log:printError("Failed to send email notification",
                         'error = emailResult,
@@ -43,6 +33,11 @@ service on kafkaLis {
                 );
                 return emailResult;
             }
+            log:printInfo("Email sent successfully",
+                    shipmentId = shipmentMessage.shipmentId,
+                    recipient = shipmentMessage.customerEmail,
+                    correlationId = correlationId
+            );
         }
     }
 

@@ -51,57 +51,8 @@ public function insertEnrichedShipmentToDb(EnrichedShipment enrichedShipment) re
     return {success: true, recordsInserted: result.affectedRowCount ?: 0, errorMessage: ()};
 }
 
-// Insert NDJSON content to database asynchronously 
-public function insertNdjsonContentAsync(string fileName, string ndjsonContent, int recordCount, int batchNo, string correlationId) returns DatabaseResult {
-    if !enableDatabaseStorage {
-        return {success: false, recordsInserted: 0, errorMessage: "Database storage is disabled"};
-    }
-
-    mysql:Client|error dbClient = getMysqlClient();
-    if dbClient is error {
-        log:printError("Failed to get MySQL client for NDJSON", 'error = dbClient);
-        return {success: false, recordsInserted: 0, errorMessage: dbClient.message()};
-    }
-
-    NdjsonLogRecord ndjsonRecord = {
-        fileName,
-        batchNo,
-        ndjsonContent,
-        correlationId,
-        recordCount,
-        contentSize: ndjsonContent.length(),
-        processedAt: time:utcToString(time:utcNow()),
-        sftpUploaded: false,
-        sftpPath: ()
-    };
-
-    sql:ParameterizedQuery insertQuery = `
-        INSERT INTO ndjson_logs (
-            file_name, batch_no, ndjson_content, correlation_id, record_count, content_size, 
-            processed_at, sftp_uploaded, sftp_path
-        ) VALUES (
-            ${ndjsonRecord.fileName}, ${ndjsonRecord.batchNo}, ${ndjsonRecord.ndjsonContent}, 
-            ${ndjsonRecord.correlationId}, ${ndjsonRecord.recordCount}, ${ndjsonRecord.contentSize}, 
-            ${ndjsonRecord.processedAt}, ${ndjsonRecord.sftpUploaded}, ${ndjsonRecord.sftpPath}
-        )
-        ON DUPLICATE KEY UPDATE
-            ndjson_content = VALUES(ndjson_content),
-            record_count = VALUES(record_count),
-            content_size = VALUES(content_size),
-            processed_at = VALUES(processed_at)
-    `;
-
-    sql:ExecutionResult|sql:Error result = dbClient->execute(insertQuery);
-    if result is sql:Error {
-        log:printError("Failed to insert NDJSON content: " + fileName, 'error = result);
-        return {success: false, recordsInserted: 0, errorMessage: result.message()};
-    }
-
-    return {success: true, recordsInserted: result.affectedRowCount ?: 0, errorMessage: ()};
-}
-
 // Insert multiple enriched shipments to database asynchronously 
-public function insertEnrichedShipmentsBatchAsync(EnrichedShipment[] enrichedShipments, string correlationId) returns DatabaseResult {
+public function insertAndNotifyEnrichedShipmentsAsync(EnrichedShipment[] enrichedShipments, string correlationId) returns DatabaseResult {
     if !enableDatabaseStorage {
         return {success: false, recordsInserted: 0, errorMessage: "Database storage is disabled"};
     }
@@ -126,10 +77,10 @@ public function insertEnrichedShipmentsBatchAsync(EnrichedShipment[] enrichedShi
         foreach EnrichedShipment enrichedShipment in batchChunk {
             future<DatabaseResult> _ = start insertEnrichedShipmentToDb(enrichedShipment);
             // For demo purposes, limit Kafka event publishing to first N shipments to prevent email overload
-        if (sentEmailCount < kafkaEventPublishCount) {
-            publishShipmentEvent(enrichedShipment, correlationId);
-            sentEmailCount += 1;
-        }
+            if (sentEmailCount < kafkaEventPublishCount) {
+                publishShipmentEvent(enrichedShipment, correlationId);
+                sentEmailCount += 1;
+            }
             totalInserted += 1;
         }
 
@@ -152,49 +103,6 @@ public function insertEnrichedShipmentsBatchAsync(EnrichedShipment[] enrichedShi
                 errors.length().toString() + " errors");
 
     return {success, recordsInserted: totalInserted, errorMessage};
-}
-
-// Insert quarantine record to database
-public function insertQuarantineRecordToDb(QuarantineDbRecord quarantineRecord, string correlationId) returns DatabaseResult {
-    if !enableDatabaseStorage {
-        return {success: false, recordsInserted: 0, errorMessage: "Database storage is disabled"};
-    }
-
-    mysql:Client|error dbClient = getMysqlClient();
-    if dbClient is error {
-        log:printError("Failed to get MySQL client for quarantine", 'error = dbClient);
-        return {success: false, recordsInserted: 0, errorMessage: dbClient.message()};
-    }
-
-    sql:ParameterizedQuery insertQuery = `
-        INSERT INTO quarantine_records (
-            quarantine_id, shipment_id, shipment_date, csv_product_code, email, shipment_status,
-            order_id, origin, destination, correlation_id, error_message, error_type,
-            attempt_count, quarantined_at, csv_row_json, file_name, file_source,
-            retry_eligible, retry_after, resolved_at, resolution_notes
-        ) VALUES (
-            ${quarantineRecord.quarantine_id}, ${quarantineRecord.shipment_id}, 
-            ${quarantineRecord.shipment_date}, ${quarantineRecord.csv_product_code}, 
-            ${quarantineRecord.email}, ${quarantineRecord.shipment_status},
-            ${quarantineRecord.order_id}, ${quarantineRecord.origin}, ${quarantineRecord.destination},
-            ${quarantineRecord.correlation_id}, ${quarantineRecord.error_message}, ${quarantineRecord.error_type},
-            ${quarantineRecord.attempt_count}, ${quarantineRecord.quarantined_at}, 
-            ${quarantineRecord.csv_row_json}, ${quarantineRecord.file_name}, ${quarantineRecord.file_source},
-            ${quarantineRecord.retry_eligible}, ${quarantineRecord.retry_after}, 
-            ${quarantineRecord.resolved_at}, ${quarantineRecord.resolution_notes}
-        )
-    `;
-
-    sql:ExecutionResult|sql:Error result = dbClient->execute(insertQuery);
-    if result is sql:Error {
-        log:printError("Failed to insert quarantine record", quarantineId = quarantineRecord.quarantine_id, 'error = result);
-        return {success: false, recordsInserted: 0, errorMessage: result.message()};
-    }
-
-    log:printInfo("Successfully quarantined record: " + quarantineRecord.quarantine_id +
-                ", shipment: " + quarantineRecord.shipment_id);
-
-    return {success: true, recordsInserted: 1, errorMessage: ()};
 }
 
 // Helper function to convert products to JSON string

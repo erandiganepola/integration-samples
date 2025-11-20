@@ -29,7 +29,7 @@ public function generateShipmentEmailBody(ShipmentMessage message) returns strin
 }
 
 // Function to send shipment notification email
-public function sendShipmentNotification(ShipmentMessage message, string? correlationId) returns error? {
+public function sendShipmentNotificationEmail(ShipmentMessage message, string? correlationId) returns error? {
     string emailBody = generateShipmentEmailBody(message);
     string subject = string `Shipment Received - ${message.shipmentId}`;
 
