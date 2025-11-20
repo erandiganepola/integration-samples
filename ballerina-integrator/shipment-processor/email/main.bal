@@ -1,5 +1,6 @@
 import ballerina/log;
 import ballerinax/kafka;
+import ballerinax/wso2.controlplane as _;
 
 // Kafka service to consume shipment messages and send emails
 listener kafka:Listener kafkaLis = new kafka:Listener(

@@ -1,6 +1,7 @@
 import ballerina/ftp;
 import ballerina/log;
 import ballerina/uuid;
+import ballerinax/wso2.controlplane as _;
 
 // Global state for email tracking
 int sentEmailCount = 0;

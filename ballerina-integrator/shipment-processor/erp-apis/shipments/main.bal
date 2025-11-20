@@ -1,4 +1,5 @@
 import ballerina/http;
+import ballerinax/wso2.controlplane as _;
 
 // Sample data arrays for generating mock shipments
 string[] sampleCities = [

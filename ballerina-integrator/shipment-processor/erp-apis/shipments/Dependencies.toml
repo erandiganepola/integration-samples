@@ -379,7 +379,26 @@ modules = [
 ]
 
 [[package]]
-org = "shashika"
+org = "ballerinax"
+name = "wso2.controlplane"
+version = "1.1.0"
+dependencies = [
+	{org = "ballerina", name = "file"},
+	{org = "ballerina", name = "http"},
+	{org = "ballerina", name = "jballerina.java"},
+	{org = "ballerina", name = "jwt"},
+	{org = "ballerina", name = "lang.array"},
+	{org = "ballerina", name = "lang.runtime"},
+	{org = "ballerina", name = "log"},
+	{org = "ballerina", name = "os"},
+	{org = "ballerina", name = "uuid"}
+]
+modules = [
+	{org = "ballerinax", packageName = "wso2.controlplane", moduleName = "wso2.controlplane"}
+]
+
+[[package]]
+org = "erandi"
 name = "shipments"
 version = "0.1.0"
 dependencies = [
@@ -387,9 +406,10 @@ dependencies = [
 	{org = "ballerina", name = "sql"},
 	{org = "ballerina", name = "test"},
 	{org = "ballerina", name = "time"},
-	{org = "ballerinax", name = "mysql"}
+	{org = "ballerinax", name = "mysql"},
+	{org = "ballerinax", name = "wso2.controlplane"}
 ]
 modules = [
-	{org = "shashika", packageName = "shipments", moduleName = "shipments"}
+	{org = "erandi", packageName = "shipments", moduleName = "shipments"}
 ]
 

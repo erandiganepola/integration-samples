@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [build-options]
 sticky = true
+remoteManagement=true
 
 [[platform.java17.dependency]]
 artifactId = "mysql-connector-java"
