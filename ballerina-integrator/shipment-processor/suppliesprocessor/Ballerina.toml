@@ -1,6 +1,6 @@
 [package]
-name = "shipmentprocessor"
-org = "shashika"
+name = "suppliesprocessor"
+org = "erandi"
 version = "0.1.0"
 
 [build-options]
